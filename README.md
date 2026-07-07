@@ -51,13 +51,42 @@ look-around rendering (WebGL, drag to pan; "360" button forces it on/off).
 - Without one: any wide phone/tablet camera works — the viewer digitally pans a
   zoomed wide feed. Less magic, same test.
 
+## Tech validation ladder
+
+Run these in order — each rung isolates one layer. On any failure, run
+**🔧 Run connection check** (landing page) on that network and screenshot it.
+In a session, tap the timer chip to see live stats: which network path the
+connection took (LAN / STUN / TURN), RTT, bitrate, resolution.
+
+| Rung | Test | Proves |
+|------|------|--------|
+| 0 | Two tabs, same machine | App + signaling broker |
+| 1 | Two devices, same Wi-Fi | Real cameras/mics, mobile autoplay quirks |
+| 2 | Phone on cellular ↔ home Wi-Fi | NAT traversal across networks (do this solo: turn off Wi-Fi on one phone) |
+| 3 | Hotel Wi-Fi ↔ home | The real gauntlet — may need TURN |
+| 4 | 60+ min session | Endurance; watch the stats overlay for drops |
+| 5 | 360 camera as webcam | The only rung needing hardware |
+
+## TURN relay (needed only if rung 2/3 fails)
+
+There is no reliable free-anonymous TURN server (we probed the known ones —
+dead). If the connection check shows `STUN ✗` or a hotel network blocks the
+call, get free credentials: **metered.ca** → sign up (free, 50GB/mo) → copy
+your TURN URLs + username + credential. Then open the app once per device as:
+
+```
+https://josharend.github.io/couch-link/#turn=turn:a.relay.metered.ca:80,turn:a.relay.metered.ca:443|USERNAME|CREDENTIAL
+```
+
+It persists in localStorage; afterwards the plain link works on that device.
+The connection check reports whether TURN is configured and reachable.
+
 ## Known limits (prototype-honest)
 
-- Signaling rides the free public PeerJS broker; media is peer-to-peer. No TURN
-  relay, so a strict hotel network may block it — that failure is itself data
-  (it's the infrastructure a real product would pay for).
+- Signaling rides the free public PeerJS broker; media is peer-to-peer.
 - One visitor at a time, no accounts, no persistence. Refresh = start over.
 - Codes are 4 letters and unauthenticated. Fine for family testing, not for real use.
+- No auto-rejoin after a dropped connection yet — you knock again.
 
 ## Debug
 

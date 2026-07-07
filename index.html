@@ -86,6 +86,10 @@
     justify-content:center; background:rgba(0,0,0,.45); color:#fff; font-size:22px;
     font-weight:700; cursor:pointer}
 
+  .chip{cursor:pointer}
+  #statsBox{position:fixed; left:14px; bottom:96px; z-index:7; background:rgba(10,18,32,.85);
+    backdrop-filter:blur(6px); border-radius:12px; padding:12px 14px; font-family:ui-monospace,Consolas,monospace;
+    font-size:12px; line-height:1.7; color:var(--ink); white-space:pre; border:1px solid var(--panel2)}
   #toast{position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(120px);
     background:var(--panel2); color:var(--ink); border-left:4px solid var(--amber);
     padding:13px 18px; border-radius:12px; font-size:14px; max-width:88vw; z-index:99;
@@ -102,8 +106,18 @@
   <p class="sub">Not a call. Company.</p>
   <button class="btn" id="btnHome">🛋️&nbsp; This is the couch — set up at home</button>
   <button class="btn ghost" id="btnAway">✈️&nbsp; I'm away — come sit down</button>
+  <button class="btn ghost" id="btnDiag" style="font-size:14px; padding:12px 18px">🔧&nbsp; Run connection check</button>
   <p class="fine">Prototype. Peer-to-peer, no accounts. Camera needs HTTPS (or localhost).
   Home side: prop this device on the couch. Away side: open this same page anywhere.</p>
+</div>
+
+<!-- ═══════════ CONNECTION CHECK ═══════════ -->
+<div id="s-diag" class="screen">
+  <h2>Connection check</h2>
+  <p class="sub">Run this on any network you plan to use — especially hotel Wi-Fi.</p>
+  <div id="diagRows" style="text-align:left; font-family:ui-monospace,Consolas,monospace; font-size:14px; line-height:2.1; background:var(--panel); padding:18px 22px; border-radius:14px; width:min(88vw,440px)"></div>
+  <button class="btn ghost" id="btnCopyDiag">Copy report</button>
+  <button class="btn ghost" id="btnDiagBack">Back</button>
 </div>
 
 <!-- ═══════════ HOME: CAMERA SETUP ═══════════ -->
@@ -190,6 +204,7 @@
   <button class="btn" onclick="location.reload()">Back to the start</button>
 </div>
 
+<div id="statsBox" class="hidden"></div>
 <div id="toast"></div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
@@ -207,6 +222,30 @@
    ═══════════════════════════════════════════════════════════════ */
 
 const $ = s => document.querySelector(s);
+
+/* ICE servers: STUN finds the direct path (works for most network combos).
+   TURN relays when a hotel/carrier NAT blocks direct — there is no reliable
+   free-anonymous TURN (probed and dead), so TURN is pluggable instead:
+   grab free creds (e.g. metered.ca, 50GB/mo) and open the link once as
+     index.html#turn=<url1,url2>|<username>|<credential>
+   It persists in localStorage on that device afterwards. */
+const PEER_OPTS = { config: { iceServers: [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:global.stun.twilio.com:3478' }
+]}};
+(function loadTurnConfig(){
+  try{
+    const m = /[#&]turn=([^&]+)/.exec(location.hash);
+    if(m) localStorage.setItem('ph_turn', decodeURIComponent(m[1]));
+    const saved = localStorage.getItem('ph_turn');
+    if(!saved) return;
+    const [urls, username, credential] = saved.split('|');
+    if(!urls || !username || !credential) return;
+    urls.split(',').forEach(u=>PEER_OPTS.config.iceServers.push({urls:u.trim(), username, credential}));
+    PEER_OPTS._customTurn = urls;
+  }catch(e){}
+})();
+
 const state = {
   role:null, code:null, peer:null, conn:null, call:null,
   localStream:null, remoteStream:null,
@@ -331,8 +370,9 @@ function genCode(){
 let idRetries = 0;
 function openDoor(){
   state.code = genCode();
-  const peer = new Peer('ph-'+state.code);
+  const peer = new Peer('ph-'+state.code, PEER_OPTS);
   state.peer = peer;
+  peer.on('disconnected', ()=>{ if(!peer.destroyed){ iceLog.push('broker lost — reconnecting'); peer.reconnect(); } });
   peer.on('open', ()=>{
     $('#codeOut').textContent = state.code;
     $('#doorPreview').srcObject = state.localStream;
@@ -400,7 +440,8 @@ async function knock(){
   }
 
   $('#waitMsg').textContent = 'Knocking…';
-  const peer = new Peer(); state.peer = peer;
+  const peer = new Peer(PEER_OPTS); state.peer = peer;
+  peer.on('disconnected', ()=>{ if(!peer.destroyed){ iceLog.push('broker lost — reconnecting'); peer.reconnect(); } });
   peer.on('open', ()=>{
     const conn = peer.connect('ph-'+code, {reliable:true});
     state.conn = conn;
@@ -470,7 +511,65 @@ function startSession(role){
   state.timerInt = setInterval(()=>{
     chip.textContent = icon + fmt((Date.now()-state.startedAt)/1000);
   }, 1000);
+  hookConnection(state.call);
   show(role==='home' ? 's-home-session' : 's-away-session');
+}
+
+/* ── connection telemetry: which network path, RTT, bitrate ──
+   Tap the timer chip in-session to toggle the stats overlay. */
+const iceLog = [];
+let statsPrev = null, statsInt = 0;
+function hookConnection(call){
+  const pc = call && call.peerConnection;
+  if(!pc) return;
+  state.pc = pc;
+  pc.addEventListener('iceconnectionstatechange', ()=>{
+    const s = pc.iceConnectionState;
+    iceLog.push(fmt((Date.now()-state.startedAt)/1000)+' ice:'+s);
+    if(s==='disconnected') toast('Connection unstable — hanging on…');
+    if(s==='failed') endSession('Connection failed — the network path was lost.');
+  });
+  statsPrev = null;
+  clearInterval(statsInt);
+  statsInt = setInterval(statsTick, 2000);
+}
+async function statsTick(){
+  const pc = state.pc; if(!pc || pc.connectionState==='closed') return;
+  try{
+    const rep = await pc.getStats();
+    let pair=null, transport=null, inb=null;
+    rep.forEach(r=>{
+      if(r.type==='transport') transport=r;
+      if(r.type==='inbound-rtp' && r.kind==='video') inb=r;
+    });
+    if(transport && transport.selectedCandidatePairId) pair = rep.get(transport.selectedCandidatePairId);
+    if(!pair) rep.forEach(r=>{ if(r.type==='candidate-pair' && r.state==='succeeded' && r.nominated) pair=r; });
+    const lc = pair ? (rep.get(pair.localCandidateId)||{}) : {};
+    const rc = pair ? (rep.get(pair.remoteCandidateId)||{}) : {};
+    const path = (lc.candidateType==='relay'||rc.candidateType==='relay') ? 'RELAY (TURN)'
+      : (lc.candidateType==='srflx'||rc.candidateType==='srflx') ? 'direct (via STUN)'
+      : lc.candidateType ? 'direct (LAN)' : '…';
+    state.lastPath = path;
+    const now = Date.now();
+    let down=0, up=0;
+    if(statsPrev && pair){
+      const dt=(now-statsPrev.t)/1000;
+      down=Math.max(0,((pair.bytesReceived||0)-statsPrev.rx)*8/1000/dt);
+      up=Math.max(0,((pair.bytesSent||0)-statsPrev.tx)*8/1000/dt);
+    }
+    if(pair) statsPrev={t:now, rx:pair.bytesReceived||0, tx:pair.bytesSent||0};
+    const rtt = (pair && pair.currentRoundTripTime!=null) ? Math.round(pair.currentRoundTripTime*1000)+' ms' : '—';
+    const res = (inb && inb.frameWidth) ? inb.frameWidth+'×'+inb.frameHeight : '—';
+    const fps = (inb && inb.framesPerSecond!=null) ? inb.framesPerSecond : '—';
+    $('#statsBox').textContent = [
+      'path  ' + path,
+      'rtt   ' + rtt,
+      'down  ' + Math.round(down) + ' kbps',
+      'up    ' + Math.round(up) + ' kbps',
+      'video ' + res + ' @ ' + fps + 'fps',
+      ...iceLog.slice(-4)
+    ].join('\n');
+  }catch(e){}
 }
 function toggleMute(btn){
   const tracks = state.localStream ? state.localStream.getAudioTracks() : [];
@@ -490,6 +589,7 @@ function endSession(msg){
 }
 function cleanup(){
   clearInterval(state.timerInt); clearTimeout(state.knockTimeout);
+  clearInterval(statsInt);
   cancelAnimationFrame(state.glLoop);
   try{ state.call && state.call.close(); }catch(e){}
   try{ state.conn && state.conn.close(); }catch(e){}
@@ -633,7 +733,69 @@ function startGL(){
   loop();
 }
 
+/* ═══════════ CONNECTION CHECK ═══════════
+   Tests every layer the app depends on, worst network first:
+   secure context → media APIs → camera permission → signaling broker
+   → STUN (public address) → TURN (relay fallback). */
+async function runDiag(){
+  show('s-diag');
+  const rows = $('#diagRows'); rows.innerHTML='';
+  const put = (k,v)=>{
+    let el = document.getElementById('dg-'+k);
+    if(!el){ el=document.createElement('div'); el.id='dg-'+k; rows.appendChild(el); }
+    el.textContent = v;
+  };
+  put('sec', (window.isSecureContext?'✓':'✗')+' secure context (HTTPS / localhost)');
+  put('gum', (navigator.mediaDevices&&navigator.mediaDevices.getUserMedia?'✓':'✗')+' camera/mic API present');
+  put('rtc', (window.RTCPeerConnection?'✓':'✗')+' WebRTC supported');
+  put('cfg', PEER_OPTS._customTurn ? '✓ TURN configured: '+PEER_OPTS._customTurn.split(',')[0]
+                                   : '– no TURN configured (STUN only; see README)');
+
+  put('cam','… camera + mic permission');
+  try{
+    const s = await navigator.mediaDevices.getUserMedia({video:true, audio:true});
+    s.getTracks().forEach(t=>t.stop());
+    put('cam','✓ camera + mic OK');
+  }catch(e){ put('cam','✗ camera/mic: '+e.name); }
+
+  put('brk','… signaling broker (PeerJS cloud)');
+  await new Promise(res=>{
+    let p; try{ p = new Peer(PEER_OPTS); }catch(e){ put('brk','✗ broker: '+e.message); return res(); }
+    const to = setTimeout(()=>{ put('brk','✗ broker: timeout (blocked or down)'); try{p.destroy();}catch(_){} res(); }, 8000);
+    p.on('open', ()=>{ clearTimeout(to); put('brk','✓ signaling broker reachable'); p.destroy(); res(); });
+    p.on('error', e=>{ clearTimeout(to); put('brk','✗ broker: '+e.type); try{p.destroy();}catch(_){} res(); });
+  });
+
+  put('ice','… NAT traversal — gathering candidates (~6s)');
+  const types = new Set();
+  await new Promise(res=>{
+    let pc; try{ pc = new RTCPeerConnection(PEER_OPTS.config); }
+    catch(e){ put('ice','✗ ICE: '+e.message); return res(); }
+    pc.createDataChannel('probe');
+    pc.onicecandidate = ev=>{
+      if(ev.candidate){ const m = / typ (\w+)/.exec(ev.candidate.candidate); if(m) types.add(m[1]); }
+    };
+    pc.createOffer().then(o=>pc.setLocalDescription(o)).catch(()=>{});
+    setTimeout(()=>{
+      pc.close();
+      put('ice', (types.has('srflx')?'✓':'✗')+' STUN — public address '+(types.has('srflx')?'found':'NOT found'));
+      put('turn',(types.has('relay')?'✓':'✗')+' TURN relay '+(types.has('relay')?'available':'unavailable — hard NATs will fail'));
+      res();
+    }, 6000);
+  });
+  state.diagText = [...rows.children].map(e=>e.textContent).join('\n')
+    + '\nUA: ' + navigator.userAgent;
+}
+
 /* ═══════════ wire up buttons ═══════════ */
+$('#btnDiag').onclick = runDiag;
+$('#btnDiagBack').onclick = ()=>location.reload();
+$('#btnCopyDiag').onclick = ()=>{
+  navigator.clipboard.writeText(state.diagText||'').then(()=>toast('Report copied.'))
+    .catch(()=>toast('Copy failed — screenshot instead.'));
+};
+$('#homeTimer').onclick = ()=>$('#statsBox').classList.toggle('hidden');
+$('#awayTimer').onclick = ()=>$('#statsBox').classList.toggle('hidden');
 $('#btnHome').onclick = startHome;
 $('#btnAway').onclick = startAway;
 $('#btnHomeBack').onclick = ()=>location.reload();
@@ -662,7 +824,7 @@ state.selfTest = async function(code){
   if(!code) return 'open the door first';
   const log = [];
   const st = testPatternStream('VISITOR');
-  const p2 = new Peer();
+  const p2 = new Peer(PEER_OPTS);
   await new Promise((res,rej)=>{ p2.on('open',res); p2.on('error',rej); });
   const c2 = p2.connect('ph-'+code, {reliable:true});
   c2.on('open', ()=>{ log.push('conn open'); c2.send({t:'knock', name:'Test Visitor'}); log.push('knocked'); });
