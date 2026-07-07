@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PresenceHub — Couch Link</title>
+<style>
+  :root{
+    --bg:#0a1220; --panel:#141f33; --panel2:#1b2a45;
+    --ink:#e9eef8; --dim:#8fa3c0; --cyan:#53d6e8; --amber:#f6b860;
+    --green:#69d49a; --red:#e2726e;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; overflow:hidden}
+  .screen{display:none; position:fixed; inset:0; flex-direction:column; align-items:center;
+    justify-content:center; gap:18px; padding:28px; text-align:center; overflow-y:auto}
+  .screen.active{display:flex}
+  .brand{font-size:12px; letter-spacing:.45em; color:var(--cyan); font-weight:700}
+  h1{margin:0; font-size:38px; font-weight:800}
+  h2{margin:0; font-size:26px; font-weight:700}
+  .sub{margin:0; color:var(--dim); font-size:16px}
+  .fine{color:var(--dim); font-size:12px; max-width:340px; line-height:1.5}
+  .btn{appearance:none; border:0; border-radius:16px; padding:18px 26px; font-size:17px;
+    font-weight:700; cursor:pointer; width:100%; max-width:360px;
+    background:linear-gradient(180deg,#63e0f0,#3cc4d8); color:#06222a}
+  .btn:active{transform:scale(.98)}
+  .btn.ghost{background:var(--panel2); color:var(--ink); font-weight:600}
+  .btn.danger{background:linear-gradient(180deg,#ea8a86,#d9615c); color:#2c0c0b}
+  .btn.amber{background:linear-gradient(180deg,#f8c87e,#eda94e); color:#3a2408}
+  .note{color:var(--amber); font-size:14px; max-width:360px; line-height:1.5}
+  .hidden{display:none !important}
+
+  /* home setup */
+  #homePreview{width:min(86vw,420px); aspect-ratio:4/3; object-fit:cover; border-radius:18px;
+    background:#000; border:1px solid var(--panel2)}
+  select{background:var(--panel2); color:var(--ink); border:0; border-radius:12px;
+    padding:12px 14px; font-size:15px; width:100%; max-width:360px}
+
+  /* door */
+  .code{font-size:64px; font-weight:800; letter-spacing:.32em; padding-left:.32em;
+    color:var(--cyan); text-shadow:0 0 28px rgba(83,214,232,.35)}
+  #doorPreview{width:150px; aspect-ratio:4/3; object-fit:cover; border-radius:12px;
+    background:#000; opacity:.7}
+  #doorKnock{position:relative}
+  .knock-glow{position:fixed; inset:0; pointer-events:none;
+    background:radial-gradient(ellipse at center, rgba(246,184,96,.16), rgba(246,184,96,0) 60%);
+    animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.45}50%{opacity:1}}
+  .knock-emoji{font-size:56px; animation:pulse 1.6s ease-in-out infinite}
+
+  /* code input */
+  #codeIn{background:var(--panel2); border:2px solid transparent; border-radius:16px;
+    color:var(--ink); font-size:40px; font-weight:800; letter-spacing:.3em; padding:14px 10px 14px calc(10px + .3em);
+    width:min(80vw,280px); text-align:center; text-transform:uppercase; outline:none}
+  #codeIn:focus{border-color:var(--cyan)}
+
+  .spinner{width:44px; height:44px; border-radius:50%; border:4px solid var(--panel2);
+    border-top-color:var(--cyan); animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* sessions */
+  .session{padding:0; background:#000}
+  #faceWrap{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    perspective:1000px}
+  #faceVid{width:100%; height:100%; object-fit:cover;
+    transition:transform .3s ease}
+  #stage{position:absolute; inset:0; touch-action:none; cursor:grab; overflow:hidden}
+  #stage:active{cursor:grabbing}
+  #roomVid{width:100%; height:100%; object-fit:cover; transition:transform .12s linear; pointer-events:none}
+  #roomGL{width:100%; height:100%; display:block}
+  #dragHint{position:absolute; left:0; right:0; top:14%; text-align:center; color:#fff;
+    font-size:17px; font-weight:600; text-shadow:0 1px 8px #000; pointer-events:none;
+    animation:hintfade 5s ease forwards}
+  @keyframes hintfade{0%,60%{opacity:.95}100%{opacity:0}}
+  .selfview{position:absolute; right:14px; bottom:96px; width:26vw; max-width:150px;
+    aspect-ratio:3/4; object-fit:cover; border-radius:14px; border:1px solid rgba(255,255,255,.25);
+    background:#111; z-index:5}
+  .chip{position:absolute; top:14px; left:14px; z-index:5; background:rgba(10,18,32,.72);
+    backdrop-filter:blur(6px); border-radius:999px; padding:8px 16px; font-size:14px;
+    font-weight:700; color:var(--ink)}
+  .controls{position:absolute; left:0; right:0; bottom:18px; display:flex; gap:10px;
+    justify-content:center; z-index:6; flex-wrap:wrap; padding:0 12px}
+  .controls .btn{width:auto; max-width:none; padding:13px 18px; font-size:14px; border-radius:999px}
+  .soundtap{position:absolute; inset:0; z-index:8; display:flex; align-items:center;
+    justify-content:center; background:rgba(0,0,0,.45); color:#fff; font-size:22px;
+    font-weight:700; cursor:pointer}
+
+  #toast{position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(120px);
+    background:var(--panel2); color:var(--ink); border-left:4px solid var(--amber);
+    padding:13px 18px; border-radius:12px; font-size:14px; max-width:88vw; z-index:99;
+    transition:transform .25s ease; box-shadow:0 8px 30px rgba(0,0,0,.5)}
+  #toast.show{transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<!-- ═══════════ LANDING ═══════════ -->
+<div id="s-landing" class="screen active">
+  <div class="brand">PRESENCEHUB</div>
+  <h1>Couch Link</h1>
+  <p class="sub">Not a call. Company.</p>
+  <button class="btn" id="btnHome">🛋️&nbsp; This is the couch — set up at home</button>
+  <button class="btn ghost" id="btnAway">✈️&nbsp; I'm away — come sit down</button>
+  <p class="fine">Prototype. Peer-to-peer, no accounts. Camera needs HTTPS (or localhost).
+  Home side: prop this device on the couch. Away side: open this same page anywhere.</p>
+</div>
+
+<!-- ═══════════ HOME: CAMERA SETUP ═══════════ -->
+<div id="s-home-setup" class="screen">
+  <h2>Set up the room camera</h2>
+  <p class="sub">Point it at the room — this is what they'll see.</p>
+  <video id="homePreview" muted playsinline autoplay></video>
+  <select id="camSel" class="hidden"></select>
+  <div id="homeCamNote" class="note hidden"></div>
+  <button class="btn ghost hidden" id="btnRetryCam">Retry camera</button>
+  <button class="btn" id="btnOpenDoor" disabled>Open the door</button>
+  <button class="btn ghost" id="btnHomeBack">Back</button>
+</div>
+
+<!-- ═══════════ HOME: DOOR ═══════════ -->
+<div id="s-door" class="screen">
+  <div id="doorWait" style="display:flex;flex-direction:column;align-items:center;gap:16px">
+    <h2>The door is open</h2>
+    <div class="code" id="codeOut">····</div>
+    <p class="sub" style="max-width:320px">Tell them this code. When they knock,<br>you decide whether to let them in.</p>
+    <video id="doorPreview" muted playsinline autoplay></video>
+    <button class="btn ghost" id="btnCloseDoor">Close the door</button>
+  </div>
+  <div id="doorKnock" class="hidden" style="flex-direction:column;align-items:center;gap:18px">
+    <div class="knock-glow"></div>
+    <div class="knock-emoji">✈️</div>
+    <h2><span id="knockName">Someone</span> is at the door</h2>
+    <button class="btn amber" id="btnLetIn">Let them in</button>
+    <button class="btn ghost" id="btnNotNow">Not now</button>
+  </div>
+</div>
+
+<!-- ═══════════ AWAY: JOIN ═══════════ -->
+<div id="s-away-join" class="screen">
+  <h2>Knock on the door</h2>
+  <p class="sub">Enter the code on the couch screen at home.</p>
+  <input id="codeIn" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters">
+  <button class="btn" id="btnKnock">Knock 👊</button>
+  <div id="joinStatus" class="note"></div>
+  <button class="btn ghost" id="btnAwayBack">Back</button>
+</div>
+
+<!-- ═══════════ AWAY: WAITING ═══════════ -->
+<div id="s-away-wait" class="screen">
+  <div class="spinner"></div>
+  <p class="sub" id="waitMsg">Knocking…</p>
+  <button class="btn ghost" id="btnCancelKnock">Walk away</button>
+</div>
+
+<!-- ═══════════ HOME: SESSION (face on the couch) ═══════════ -->
+<div id="s-home-session" class="screen session">
+  <div id="faceWrap"><video id="faceVid" playsinline autoplay></video></div>
+  <video id="homeSelf" class="selfview" muted playsinline autoplay></video>
+  <div class="chip" id="homeTimer">✈️ 00:00</div>
+  <div class="controls">
+    <button class="btn ghost" id="homeMute">Mute mic</button>
+    <button class="btn danger" id="homeEnd">They head out</button>
+  </div>
+  <div id="homeSound" class="soundtap hidden">🔊 Tap for sound</div>
+</div>
+
+<!-- ═══════════ AWAY: SESSION (the room) ═══════════ -->
+<div id="s-away-session" class="screen session">
+  <div id="stage">
+    <video id="roomVid" playsinline autoplay></video>
+    <canvas id="roomGL" class="hidden"></canvas>
+    <div id="dragHint">‹ drag to look around ›</div>
+  </div>
+  <video id="awaySelf" class="selfview" muted playsinline autoplay></video>
+  <div class="chip" id="awayTimer">🛋️ 00:00</div>
+  <div class="controls">
+    <button class="btn ghost" id="btn360">360: auto</button>
+    <button class="btn ghost" id="btnRecenter">Recenter</button>
+    <button class="btn ghost" id="awayMute">Mute mic</button>
+    <button class="btn danger" id="awayEnd">Leave</button>
+  </div>
+  <div id="awaySound" class="soundtap hidden">🔊 Tap for sound</div>
+</div>
+
+<!-- ═══════════ ENDED ═══════════ -->
+<div id="s-ended" class="screen">
+  <h2>Presence ended</h2>
+  <p class="sub" id="endedInfo"></p>
+  <button class="btn" onclick="location.reload()">Back to the start</button>
+</div>
+
+<div id="toast"></div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+"use strict";
+/* ═══════════════════════════════════════════════════════════════
+   PresenceHub — Couch Link (prototype)
+   One page, two roles:
+     HOME  = tablet on the couch. Shows the visitor's face, sends the room.
+     AWAY  = the traveller. Sees the room, drags to look around, sends face.
+   Rituals baked in:
+     - Knock: away can't just appear. Home glows amber + chimes; someone taps.
+     - Head-turn: away's pan direction tilts the face on the home tablet,
+       so the family can always see where he's "looking".
+   ═══════════════════════════════════════════════════════════════ */
+
+const $ = s => document.querySelector(s);
+const state = {
+  role:null, code:null, peer:null, conn:null, call:null,
+  localStream:null, remoteStream:null,
+  startedAt:0, timerInt:null, knockTimeout:null,
+  answerWhenCallArrives:false, inSession:false,
+  // away viewer
+  is360:false, mode360:'auto', auto360:false,
+  yaw:0, pitch:0, yawNorm:0, pitchNorm:0, lastYawSent:0, yawSendT:0,
+  gl:null, glLoop:0
+};
+window.PH = state; // debug handle
+
+/* ── tiny UI helpers ─────────────────────────────────────────── */
+function show(id){
+  document.querySelectorAll('.screen').forEach(el=>el.classList.remove('active'));
+  $('#'+id).classList.add('active');
+}
+let toastT = 0;
+function toast(msg, ms){
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(()=>t.classList.remove('show'), ms||4200);
+}
+function fmt(sec){
+  const m = String(Math.floor(sec/60)).padStart(2,'0');
+  return m + ':' + String(Math.floor(sec%60)).padStart(2,'0');
+}
+
+/* ── doorbell chime (WebAudio, no assets) ────────────────────── */
+let audioCtx = null;
+function chime(){
+  try{
+    audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+    const notes = [[659.25,0],[880,0.22]]; // E5 → A5
+    notes.forEach(([f,at])=>{
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type='sine'; o.frequency.value=f;
+      g.gain.setValueAtTime(0, audioCtx.currentTime+at);
+      g.gain.linearRampToValueAtTime(.28, audioCtx.currentTime+at+.03);
+      g.gain.exponentialRampToValueAtTime(.001, audioCtx.currentTime+at+.6);
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(audioCtx.currentTime+at); o.stop(audioCtx.currentTime+at+.7);
+    });
+  }catch(e){/* sound is a nicety, never fatal */}
+}
+
+/* ── test-pattern stream (fallback when no camera/mic) ───────── */
+function testPatternStream(label){
+  const c = document.createElement('canvas'); c.width=640; c.height=360;
+  const ctx = c.getContext('2d');
+  const int = setInterval(()=>{
+    const h = (Date.now()/50)%360;
+    const gr = ctx.createLinearGradient(0,0,640,360);
+    gr.addColorStop(0, `hsl(${h},45%,22%)`); gr.addColorStop(1, `hsl(${(h+80)%360},45%,12%)`);
+    ctx.fillStyle=gr; ctx.fillRect(0,0,640,360);
+    ctx.fillStyle='rgba(255,255,255,.92)'; ctx.textAlign='center';
+    ctx.font='bold 34px system-ui'; ctx.fillText(label, 320, 165);
+    ctx.font='16px system-ui'; ctx.fillText('test pattern — no camera available', 320, 200);
+    ctx.fillText(new Date().toLocaleTimeString(), 320, 228);
+  }, 90);
+  const st = c.captureStream(12);
+  st._phInt = int; // so cleanup can stop the painter
+  return st;
+}
+
+/* ── camera acquisition ──────────────────────────────────────── */
+async function getCam(role, deviceId){
+  const video = deviceId ? {deviceId:{exact:deviceId}, width:{ideal:1920}}
+    : (role==='home' ? {facingMode:'environment', width:{ideal:1920}}
+                     : {facingMode:'user'});
+  return navigator.mediaDevices.getUserMedia({
+    video, audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true}
+  });
+}
+function stopStream(st){
+  if(!st) return;
+  if(st._phInt) clearInterval(st._phInt);
+  st.getTracks().forEach(t=>t.stop());
+}
+
+/* ═══════════ HOME FLOW ═══════════ */
+async function startHome(){
+  state.role='home'; show('s-home-setup');
+  await acquireHomeCam();
+}
+async function acquireHomeCam(deviceId){
+  stopStream(state.localStream);
+  try{
+    state.localStream = await getCam('home', deviceId);
+    $('#homeCamNote').classList.add('hidden');
+    $('#btnRetryCam').classList.add('hidden');
+    populateCamPicker();
+  }catch(e){
+    state.localStream = testPatternStream('HOME');
+    $('#homeCamNote').textContent = 'Camera or mic unavailable ('+e.name+'). Using a test pattern so you can still test the connection.';
+    $('#homeCamNote').classList.remove('hidden');
+    $('#btnRetryCam').classList.remove('hidden');
+  }
+  $('#homePreview').srcObject = state.localStream;
+  $('#btnOpenDoor').disabled = false;
+}
+async function populateCamPicker(){
+  try{
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    if(devs.length < 2) return;
+    const sel = $('#camSel'); sel.innerHTML='';
+    devs.forEach((d,i)=>{
+      const o = document.createElement('option');
+      o.value=d.deviceId; o.textContent=d.label || ('Camera '+(i+1));
+      sel.appendChild(o);
+    });
+    const cur = state.localStream.getVideoTracks()[0].getSettings().deviceId;
+    if(cur) sel.value = cur;
+    sel.classList.remove('hidden');
+  }catch(e){}
+}
+
+const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ';
+function genCode(){
+  let c=''; for(let i=0;i<4;i++) c += CODE_CHARS[Math.floor(Math.random()*CODE_CHARS.length)];
+  return c;
+}
+let idRetries = 0;
+function openDoor(){
+  state.code = genCode();
+  const peer = new Peer('ph-'+state.code);
+  state.peer = peer;
+  peer.on('open', ()=>{
+    $('#codeOut').textContent = state.code;
+    $('#doorPreview').srcObject = state.localStream;
+    show('s-door');
+  });
+  peer.on('connection', c=>{
+    state.conn = c;
+    c.on('data', onData);
+    c.on('close', ()=>{ if(state.inSession) endSession('They left.'); });
+  });
+  peer.on('call', call=>{
+    state.call = call;
+    if(state.answerWhenCallArrives) answerCall();
+  });
+  peer.on('error', e=>{
+    if(e.type==='unavailable-id' && idRetries++ < 3){ peer.destroy(); openDoor(); return; }
+    toast('Connection error: '+e.type);
+  });
+}
+function doorKnock(name){
+  $('#knockName').textContent = name || 'Someone';
+  $('#doorWait').style.display='none';
+  $('#doorKnock').classList.remove('hidden');
+  $('#doorKnock').style.display='flex';
+  chime();
+}
+function letIn(){
+  state.answerWhenCallArrives = true;
+  if(state.call) answerCall();
+  try{ state.conn && state.conn.send({t:'answer'}); }catch(e){}
+}
+function answerCall(){
+  state.answerWhenCallArrives = false;
+  state.call.answer(state.localStream);
+  state.call.on('stream', st=>{
+    state.remoteStream = st;
+    attachRemote($('#faceVid'), st, $('#homeSound'));
+    $('#homeSelf').srcObject = state.localStream;
+    startSession('home');
+  });
+  state.call.on('close', ()=>{ if(state.inSession) endSession('They left.'); });
+}
+function notNow(){
+  try{ state.conn && state.conn.send({t:'busy'}); state.conn && state.conn.close(); }catch(e){}
+  state.call = null; state.conn = null;
+  $('#doorKnock').classList.add('hidden');
+  $('#doorWait').style.display='flex';
+}
+
+/* ═══════════ AWAY FLOW ═══════════ */
+function startAway(){ state.role='away'; show('s-away-join'); $('#codeIn').focus(); }
+
+async function knock(){
+  const code = $('#codeIn').value.trim().toUpperCase();
+  if(code.length !== 4){ $('#joinStatus').textContent='Code is 4 letters.'; return; }
+  state.code = code;
+  $('#joinStatus').textContent='';
+  show('s-away-wait'); $('#waitMsg').textContent = 'Getting your camera…';
+
+  stopStream(state.localStream);
+  try{ state.localStream = await getCam('away'); }
+  catch(e){
+    state.localStream = testPatternStream('AWAY');
+    toast('Camera/mic unavailable ('+e.name+') — using a test pattern.');
+  }
+
+  $('#waitMsg').textContent = 'Knocking…';
+  const peer = new Peer(); state.peer = peer;
+  peer.on('open', ()=>{
+    const conn = peer.connect('ph-'+code, {reliable:true});
+    state.conn = conn;
+    conn.on('open', ()=>{
+      conn.send({t:'knock', name:'Someone who misses you'});
+      state.knockTimeout = setTimeout(()=>{
+        $('#waitMsg').textContent = 'No one came to the door. They may be away from the couch.';
+      }, 75000);
+    });
+    conn.on('data', onData);
+    conn.on('close', ()=>{ if(state.inSession) endSession('The couch went quiet.'); });
+
+    const call = peer.call('ph-'+code, state.localStream);
+    state.call = call;
+    call.on('stream', st=>{
+      clearTimeout(state.knockTimeout);
+      state.remoteStream = st;
+      setupRoomView(st);
+      $('#awaySelf').srcObject = state.localStream;
+      startSession('away');
+    });
+    call.on('close', ()=>{ if(state.inSession) endSession('The couch went quiet.'); });
+  });
+  peer.on('error', e=>{
+    if(e.type==='peer-unavailable'){
+      show('s-away-join');
+      $('#joinStatus').textContent = 'No door with that code — double-check it.';
+    } else toast('Connection error: '+e.type);
+  });
+}
+
+/* ═══════════ SHARED: data protocol ═══════════ */
+function onData(d){
+  if(!d || typeof d !== 'object') return;
+  switch(d.t){
+    case 'knock': doorKnock(d.name); break;
+    case 'answer': clearTimeout(state.knockTimeout); $('#waitMsg').textContent='They\'re letting you in…'; break;
+    case 'busy':
+      clearTimeout(state.knockTimeout);
+      show('s-away-join');
+      $('#joinStatus').textContent = 'They can\'t come to the door right now.';
+      break;
+    case 'yaw': faceTurn(d.v); break;
+    case 'bye': endSession(state.role==='home' ? 'They headed out.' : 'The family closed the door.'); break;
+  }
+}
+
+/* remote video attach — handles mobile autoplay/sound policies */
+function attachRemote(el, stream, soundOverlay){
+  el.srcObject = stream;
+  el.muted = false;
+  el.play().catch(()=>{
+    el.muted = true;
+    el.play().catch(()=>{});
+    soundOverlay.classList.remove('hidden');
+    soundOverlay.onclick = ()=>{ el.muted=false; el.play(); soundOverlay.classList.add('hidden'); };
+  });
+}
+
+/* ═══════════ SESSION ═══════════ */
+function startSession(role){
+  state.inSession = true;
+  state.startedAt = Date.now();
+  const chip = role==='home' ? $('#homeTimer') : $('#awayTimer');
+  const icon = role==='home' ? '✈️ ' : '🛋️ ';
+  clearInterval(state.timerInt);
+  state.timerInt = setInterval(()=>{
+    chip.textContent = icon + fmt((Date.now()-state.startedAt)/1000);
+  }, 1000);
+  show(role==='home' ? 's-home-session' : 's-away-session');
+}
+function toggleMute(btn){
+  const tracks = state.localStream ? state.localStream.getAudioTracks() : [];
+  if(!tracks.length){ toast('No microphone in this stream.'); return; }
+  const on = !tracks[0].enabled;
+  tracks.forEach(t=>t.enabled=on);
+  btn.textContent = on ? 'Mute mic' : 'Unmute';
+}
+function endSession(msg){
+  if(!state.inSession && !state.peer) return;
+  state.inSession = false;
+  try{ state.conn && state.conn.open && state.conn.send({t:'bye'}); }catch(e){}
+  const dur = state.startedAt ? fmt((Date.now()-state.startedAt)/1000) : null;
+  cleanup();
+  $('#endedInfo').textContent = (msg||'') + (dur ? ('  ·  Together for '+dur) : '');
+  show('s-ended');
+}
+function cleanup(){
+  clearInterval(state.timerInt); clearTimeout(state.knockTimeout);
+  cancelAnimationFrame(state.glLoop);
+  try{ state.call && state.call.close(); }catch(e){}
+  try{ state.conn && state.conn.close(); }catch(e){}
+  setTimeout(()=>{ try{ state.peer && state.peer.destroy(); }catch(e){} }, 300);
+  stopStream(state.localStream);
+}
+window.addEventListener('beforeunload', ()=>{
+  try{ state.conn && state.conn.open && state.conn.send({t:'bye'}); }catch(e){}
+  try{ state.peer && state.peer.destroy(); }catch(e){}
+});
+
+/* ═══════════ HOME: digital head-turn ═══════════
+   When away pans the room, his face on the couch tablet turns the same
+   way — the family can always see where he's looking. */
+function faceTurn(v){ // v = normalized yaw, -1..1
+  v = Math.max(-1, Math.min(1, +v || 0));
+  $('#faceVid').style.transform =
+    `perspective(1000px) rotateY(${(v*22).toFixed(1)}deg) translateX(${(v*7).toFixed(1)}%)`;
+}
+
+/* ═══════════ AWAY: room viewer (flat pan + 360) ═══════════ */
+function setupRoomView(stream){
+  const vid = $('#roomVid');
+  vid.srcObject = stream;
+  attachRemote(vid, stream, $('#awaySound'));
+  const check = ()=>{
+    if(!vid.videoWidth) return;
+    state.auto360 = (vid.videoWidth / vid.videoHeight) > 1.85; // equirect is 2:1
+    applyViewMode();
+  };
+  vid.addEventListener('loadedmetadata', check);
+  vid.addEventListener('resize', check);
+  initDrag();
+}
+function applyViewMode(){
+  const was = state.is360;
+  state.is360 = state.mode360==='on' || (state.mode360==='auto' && state.auto360);
+  $('#btn360').textContent = '360: ' + (state.mode360==='auto' ? ('auto ('+(state.is360?'on':'off')+')') : state.mode360);
+  $('#roomGL').classList.toggle('hidden', !state.is360);
+  $('#roomVid').style.visibility = state.is360 ? 'hidden' : 'visible';
+  if(state.is360 && !was) startGL();
+  if(!state.is360){ cancelAnimationFrame(state.glLoop); applyFlatPan(); }
+}
+
+/* flat mode: digitally pan a zoomed wide feed */
+function applyFlatPan(){
+  const tx = (-state.yawNorm * 20).toFixed(2);
+  const ty = (-state.pitchNorm * 10).toFixed(2);
+  $('#roomVid').style.transform = `scale(1.7) translate(${tx}%, ${ty}%)`;
+}
+
+/* drag to look — grab-the-world metaphor, works mouse + touch */
+function initDrag(){
+  const stage = $('#stage');
+  if(stage._phDrag) return; stage._phDrag = true;
+  let dragging=false, lx=0, ly=0;
+  stage.addEventListener('pointerdown', e=>{ dragging=true; lx=e.clientX; ly=e.clientY; stage.setPointerCapture(e.pointerId); });
+  stage.addEventListener('pointermove', e=>{
+    if(!dragging) return;
+    const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY;
+    if(state.is360){
+      state.yaw -= dx*0.0042;
+      if(state.yaw> Math.PI) state.yaw-=2*Math.PI;
+      if(state.yaw<-Math.PI) state.yaw+=2*Math.PI;
+      state.pitch = Math.max(-1.35, Math.min(1.35, state.pitch + dy*0.0042));
+      sendYaw(state.yaw/Math.PI);
+    }else{
+      state.yawNorm  = Math.max(-1, Math.min(1, state.yawNorm  - dx/stage.clientWidth*2.4));
+      state.pitchNorm= Math.max(-.5, Math.min(.5, state.pitchNorm - dy/stage.clientHeight*1.2));
+      applyFlatPan();
+      sendYaw(state.yawNorm);
+    }
+  });
+  const up = ()=>dragging=false;
+  stage.addEventListener('pointerup', up); stage.addEventListener('pointercancel', up);
+}
+function sendYaw(v){
+  const now = Date.now();
+  if(now - state.yawSendT < 120 || Math.abs(v - state.lastYawSent) < 0.02) return;
+  state.yawSendT = now; state.lastYawSent = v;
+  try{ state.conn && state.conn.open && state.conn.send({t:'yaw', v:+v.toFixed(3)}); }catch(e){}
+}
+function recenter(){
+  state.yaw=0; state.pitch=0; state.yawNorm=0; state.pitchNorm=0;
+  applyFlatPan(); sendYaw(0);
+}
+
+/* ── 360 renderer: equirect video on WebGL, ~90 lines, no deps ── */
+const VSH = `attribute vec2 a; varying vec2 v; void main(){ v=a; gl_Position=vec4(a,0.,1.); }`;
+const FSH = `precision mediump float; varying vec2 v;
+uniform sampler2D tex; uniform float yaw,pitch,fovScale,aspect;
+void main(){
+  vec3 d = normalize(vec3(v.x*fovScale*aspect, v.y*fovScale, -1.0));
+  float cp=cos(pitch), sp=sin(pitch);
+  d = vec3(d.x, d.y*cp - d.z*sp, d.y*sp + d.z*cp);
+  float cy=cos(yaw), sy=sin(yaw);
+  d = vec3(d.x*cy - d.z*sy, d.y, d.x*sy + d.z*cy);
+  float lon = atan(d.x, -d.z);
+  float lat = asin(clamp(d.y, -1., 1.));
+  vec2 uv = vec2(fract(lon/6.2831853 + .5), .5 - lat/3.14159265);
+  gl_FragColor = texture2D(tex, uv);
+}`;
+function startGL(){
+  const canvas = $('#roomGL'), vid = $('#roomVid');
+  if(!state.gl){
+    const gl = canvas.getContext('webgl');
+    if(!gl){ toast('WebGL unavailable — staying in flat view.'); state.mode360='off'; applyViewMode(); return; }
+    const mk = (t,src)=>{ const s=gl.createShader(t); gl.shaderSource(s,src); gl.compileShader(s); return s; };
+    const pr = gl.createProgram();
+    gl.attachShader(pr, mk(gl.VERTEX_SHADER,VSH)); gl.attachShader(pr, mk(gl.FRAGMENT_SHADER,FSH));
+    gl.linkProgram(pr); gl.useProgram(pr);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(pr,'a');
+    gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    state.gl = { gl, u:{
+      yaw:gl.getUniformLocation(pr,'yaw'), pitch:gl.getUniformLocation(pr,'pitch'),
+      fovScale:gl.getUniformLocation(pr,'fovScale'), aspect:gl.getUniformLocation(pr,'aspect')
+    }};
+  }
+  const {gl,u} = state.gl;
+  const loop = ()=>{
+    if(!state.is360) return;
+    state.glLoop = requestAnimationFrame(loop);
+    if(vid.readyState < 2) return;
+    const dpr = Math.min(window.devicePixelRatio||1, 2);
+    const w = canvas.clientWidth*dpr|0, h = canvas.clientHeight*dpr|0;
+    if(canvas.width!==w || canvas.height!==h){ canvas.width=w; canvas.height=h; gl.viewport(0,0,w,h); }
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,vid);
+    gl.uniform1f(u.yaw, state.yaw); gl.uniform1f(u.pitch, state.pitch);
+    gl.uniform1f(u.fovScale, Math.tan(75*Math.PI/360)); gl.uniform1f(u.aspect, w/h);
+    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  };
+  loop();
+}
+
+/* ═══════════ wire up buttons ═══════════ */
+$('#btnHome').onclick = startHome;
+$('#btnAway').onclick = startAway;
+$('#btnHomeBack').onclick = ()=>location.reload();
+$('#btnAwayBack').onclick = ()=>location.reload();
+$('#btnRetryCam').onclick = ()=>acquireHomeCam();
+$('#camSel').onchange = e=>acquireHomeCam(e.target.value);
+$('#btnOpenDoor').onclick = openDoor;
+$('#btnCloseDoor').onclick = ()=>location.reload();
+$('#btnLetIn').onclick = letIn;
+$('#btnNotNow').onclick = notNow;
+$('#btnKnock').onclick = knock;
+$('#codeIn').addEventListener('keydown', e=>{ if(e.key==='Enter') knock(); });
+$('#btnCancelKnock').onclick = ()=>location.reload();
+$('#homeMute').onclick = e=>toggleMute(e.target);
+$('#awayMute').onclick = e=>toggleMute(e.target);
+$('#homeEnd').onclick = ()=>endSession('They headed out.');
+$('#awayEnd').onclick = ()=>endSession('You left the couch.');
+$('#btn360').onclick = ()=>{ state.mode360 = state.is360 ? 'off' : 'on'; applyViewMode(); };
+$('#btnRecenter').onclick = recenter;
+
+/* ═══════════ self-test hook (console / automation) ═══════════
+   With HOME open on this page, run PH.selfTest() in the console to
+   simulate a visitor knocking from a second peer with a test pattern. */
+state.selfTest = async function(code){
+  code = (code || state.code || '').toUpperCase();
+  if(!code) return 'open the door first';
+  const log = [];
+  const st = testPatternStream('VISITOR');
+  const p2 = new Peer();
+  await new Promise((res,rej)=>{ p2.on('open',res); p2.on('error',rej); });
+  const c2 = p2.connect('ph-'+code, {reliable:true});
+  c2.on('open', ()=>{ log.push('conn open'); c2.send({t:'knock', name:'Test Visitor'}); log.push('knocked'); });
+  c2.on('data', d=>log.push('data: '+JSON.stringify(d)));
+  const call2 = p2.call('ph-'+code, st);
+  call2.on('stream', s=>log.push('got home stream: '+s.getTracks().map(t=>t.kind).join('+')));
+  state._t = {p2, c2, call2, log, stream:st};
+  return 'test visitor knocking on ' + code;
+};
+</script>
+</body>
+</html>
